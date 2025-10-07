@@ -19,6 +19,23 @@ pip install -r requirements.txt
 
 ## Quick Start
 
+### Streamlit Web App (Recommended)
+
+Launch the interactive web application:
+
+```bash
+streamlit run app.py
+```
+
+This will open a browser window with an interactive interface where you can:
+- Build volatility surfaces in real-time
+- Visualize all plots interactively
+- Compare historical snapshots
+- Analyze metrics time series
+- No command-line arguments needed!
+
+### Command Line Interface
+
 ### Build a Volatility Surface
 
 ```bash
@@ -58,6 +75,7 @@ python analyze_history.py --event-study --date 2025-10-05 --days-before 3 --days
 
 ## Project Structure
 
+- `app.py` - **Streamlit web app (recommended)**
 - `main.py` - Main CLI for building volatility surfaces
 - `analyze_history.py` - CLI for historical analysis
 - `deribit_api.py` - Deribit API data collection

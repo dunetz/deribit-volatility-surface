@@ -10,6 +10,7 @@ This project builds and analyzes cryptocurrency (Bitcoin/Ethereum) implied volat
 
 ```
 .
+├── app.py                       # Streamlit web app (recommended)
 ├── main.py                      # Main CLI for building vol surfaces
 ├── analyze_history.py           # CLI for historical analysis
 ├── deribit_api.py              # Deribit API data collection
@@ -31,7 +32,22 @@ This project builds and analyzes cryptocurrency (Bitcoin/Ethereum) implied volat
 pip install -r requirements.txt
 ```
 
-### Build Current Volatility Surface
+### Streamlit Web App (Recommended)
+
+Launch the interactive web application:
+
+```bash
+streamlit run app.py
+```
+
+The app provides:
+- **Build Current Surface** mode: Real-time surface construction with interactive visualizations
+- **Analyze Historical Data** mode: Compare snapshots, view metrics time series
+- All plots displayed in browser with zoom/pan capabilities
+- No command-line arguments needed
+- User-friendly interface for all features
+
+### Build Current Volatility Surface (CLI)
 
 ```bash
 # Basic usage - build and display BTC surface
