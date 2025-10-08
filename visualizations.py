@@ -353,24 +353,47 @@ def plot_metrics_timeseries(history, save_path=None):
 def plot_greeks_surface_3d(df, underlying_price, greek='delta', save_path=None, grid_size=50):
     """
     Plot 3D surface of Greeks (delta, gamma, vega, theta, rho).
+
+    Note: For delta and theta which differ significantly between calls and puts,
+    this function uses only call options to avoid discontinuities.
+    Gamma and vega are the same for calls and puts, so all options are used.
     """
     if greek not in df.columns:
         print(f"Greek '{greek}' not available in DataFrame")
         return None, None
 
+    # For delta, theta, and rho: use only calls to avoid discontinuity
+    # For gamma and vega: use all options (they're the same for calls/puts)
+    greek_lower = greek.lower()
+    if 'delta' in greek_lower or 'theta' in greek_lower or 'rho' in greek_lower:
+        df_filtered = df[df['option_type'] == 'call'].copy()
+        greek_label = f"{greek.replace('bs_', '').capitalize()} (Calls)"
+    else:
+        df_filtered = df.copy()
+        greek_label = greek.replace('bs_', '').capitalize()
+
     # Create points and values for interpolation
-    points = df[['log_moneyness', 'tte_years']].values
-    values = df[greek].values
+    points = df_filtered[['log_moneyness', 'tte_years']].values
+    values = df_filtered[greek].values
+
+    # Remove any NaN values
+    mask = ~np.isnan(values)
+    points = points[mask]
+    values = values[mask]
+
+    if len(points) == 0:
+        print(f"No valid {greek} values available")
+        return None, None
 
     # Create regular grid
     log_moneyness_grid = np.linspace(
-        df['log_moneyness'].min(),
-        df['log_moneyness'].max(),
+        df_filtered['log_moneyness'].min(),
+        df_filtered['log_moneyness'].max(),
         grid_size
     )
     tte_grid = np.linspace(
-        df['tte_years'].min(),
-        df['tte_years'].max(),
+        df_filtered['tte_years'].min(),
+        df_filtered['tte_years'].max(),
         grid_size
     )
 
@@ -400,7 +423,7 @@ def plot_greeks_surface_3d(df, underlying_price, greek='delta', save_path=None, 
 
     ax.set_xlabel('Strike Price ($)', fontsize=12, labelpad=10)
     ax.set_ylabel('Days to Expiration', fontsize=12, labelpad=10)
-    ax.set_zlabel(greek.capitalize(), fontsize=12, labelpad=10)
+    ax.set_zlabel(greek_label, fontsize=12, labelpad=10)
     ax.set_title(f'{greek.capitalize()} Surface', fontsize=16, fontweight='bold', pad=20)
 
     fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5, pad=0.1)

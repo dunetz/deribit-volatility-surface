@@ -18,6 +18,7 @@ from metrics import calculate_surface_metrics
 from snapshot import SurfaceSnapshot, SurfaceHistory
 from visualizations import (plot_volatility_surface, plot_volatility_smile,
                            plot_term_structure, plot_heatmap, plot_greeks_surface_3d)
+from greeks import calculate_greeks_from_surface
 
 
 def build_volatility_surface(currency='BTC', method='rbf', save_snapshot=False,
@@ -110,6 +111,18 @@ def build_volatility_surface(currency='BTC', method='rbf', save_snapshot=False,
         print(f"Error building surface: {e}")
         sys.exit(1)
 
+    # Calculate Greeks from smoothed surface
+    print("\nCalculating Greeks from smoothed IV surface...")
+    try:
+        df = calculate_greeks_from_surface(
+            df, log_m_mesh, tte_mesh, iv_surf,
+            underlying_price, risk_free_rate=0.0
+        )
+        print("Greeks calculated successfully")
+    except Exception as e:
+        print(f"Warning: Error calculating Greeks: {e}")
+        # Continue without Greeks
+
     # Create snapshot
     snapshot = SurfaceSnapshot(
         timestamp=datetime.now(),
@@ -165,11 +178,17 @@ def build_volatility_surface(currency='BTC', method='rbf', save_snapshot=False,
         save_path = str(save_path_base / f"{currency}_volatility_heatmap.png") if save_plots else None
         plot_heatmap(log_m_mesh, tte_mesh, iv_surf, underlying_price, save_path=save_path)
 
-        # Plot Greek surfaces if data available
-        for greek in ['delta', 'gamma', 'vega']:
-            if greek in df.columns:
-                save_path = str(save_path_base / f"{currency}_{greek}_surface_3d.png") if save_plots else None
-                plot_greeks_surface_3d(df, underlying_price, greek=greek, save_path=save_path)
+        # Plot Greek surfaces - use calculated Greeks (bs_*) if available, otherwise Deribit data
+        greek_mapping = {
+            'delta': 'bs_delta' if 'bs_delta' in df.columns else 'delta',
+            'gamma': 'bs_gamma' if 'bs_gamma' in df.columns else 'gamma',
+            'vega': 'bs_vega' if 'bs_vega' in df.columns else 'vega'
+        }
+
+        for greek_name, greek_col in greek_mapping.items():
+            if greek_col in df.columns and df[greek_col].notna().any():
+                save_path = str(save_path_base / f"{currency}_{greek_name}_surface_3d.png") if save_plots else None
+                plot_greeks_surface_3d(df, underlying_price, greek=greek_col, save_path=save_path)
 
     print("\n" + "="*60)
     print("ANALYSIS COMPLETE!")

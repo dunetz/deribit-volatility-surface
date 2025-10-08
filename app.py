@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import sys
+import os
 from pathlib import Path
 
 # Import our modules
@@ -23,6 +24,7 @@ from visualizations import (plot_volatility_surface, plot_volatility_smile,
                            plot_term_structure, plot_heatmap, plot_greeks_surface_3d,
                            plot_surface_comparison, plot_difference_surface,
                            plot_metrics_timeseries)
+from greeks import calculate_greeks_from_surface
 
 # Page config
 st.set_page_config(
@@ -78,18 +80,26 @@ if mode == "Build Current Surface":
         help="Surface construction method"
     )
 
-    save_snapshot = st.sidebar.checkbox(
-        "Save Snapshot",
-        value=False,
-        help="Save this snapshot to disk for historical analysis"
-    )
+    # Check if running on Streamlit Cloud
+    is_cloud = os.getenv('STREAMLIT_SHARING_MODE') or os.getenv('STREAMLIT_SERVER_HEADLESS')
 
-    save_raw = st.sidebar.checkbox(
-        "Save Raw Data",
-        value=False,
-        disabled=not save_snapshot,
-        help="Save raw options data (requires Save Snapshot)"
-    )
+    if is_cloud:
+        st.sidebar.warning("⚠️ Snapshot saving disabled on Streamlit Cloud (ephemeral storage)")
+        save_snapshot = False
+        save_raw = False
+    else:
+        save_snapshot = st.sidebar.checkbox(
+            "Save Snapshot",
+            value=False,
+            help="Save this snapshot to disk for historical analysis"
+        )
+
+        save_raw = st.sidebar.checkbox(
+            "Save Raw Data",
+            value=False,
+            disabled=not save_snapshot,
+            help="Save raw options data (requires Save Snapshot)"
+        )
 
     # Build button
     if st.sidebar.button("🚀 Build Surface", type="primary"):
@@ -125,6 +135,17 @@ if mode == "Build Current Surface":
                     svi_params = None
                 elif method == 'svi':
                     log_m_mesh, tte_mesh, iv_surf, svi_params = create_svi_surface(calls)
+
+                # Calculate Greeks from smoothed surface
+                st.sidebar.info("Calculating Greeks from smoothed IV surface...")
+                try:
+                    df = calculate_greeks_from_surface(
+                        df, log_m_mesh, tte_mesh, iv_surf,
+                        underlying_price, risk_free_rate=0.0
+                    )
+                    st.sidebar.success("Greeks calculated successfully")
+                except Exception as e:
+                    st.sidebar.warning(f"Warning: Error calculating Greeks: {e}")
 
                 # Create snapshot
                 snapshot = SurfaceSnapshot(
@@ -236,15 +257,26 @@ if mode == "Build Current Surface":
             fig, _ = plot_term_structure(calls)
             st.pyplot(fig)
 
-        # Greeks if available
-        if all(col in df.columns for col in ['delta', 'gamma', 'vega']):
+        # Greeks if available - prefer calculated Greeks (bs_*) over Deribit data
+        greek_mapping = {
+            'Delta': 'bs_delta' if 'bs_delta' in df.columns else 'delta',
+            'Gamma': 'bs_gamma' if 'bs_gamma' in df.columns else 'gamma',
+            'Vega': 'bs_vega' if 'bs_vega' in df.columns else 'vega'
+        }
+
+        available_greeks = [name for name, col in greek_mapping.items() if col in df.columns and df[col].notna().any()]
+
+        if available_greeks:
             st.header("🎯 Greeks Surfaces")
+            if any('bs_' in greek_mapping[name] for name in available_greeks):
+                st.info("ℹ️ Greeks calculated from smoothed Black-Scholes model using interpolated IV surface")
 
-            greek_tabs = st.tabs(["Delta", "Gamma", "Vega"])
+            greek_tabs = st.tabs(available_greeks)
 
-            for idx, greek in enumerate(['delta', 'gamma', 'vega']):
+            for idx, greek_name in enumerate(available_greeks):
                 with greek_tabs[idx]:
-                    fig, _ = plot_greeks_surface_3d(df, snapshot.underlying_price, greek=greek)
+                    greek_col = greek_mapping[greek_name]
+                    fig, _ = plot_greeks_surface_3d(df, snapshot.underlying_price, greek=greek_col)
                     st.pyplot(fig)
 
 elif mode == "Analyze Historical Data":
@@ -252,7 +284,7 @@ elif mode == "Analyze Historical Data":
 
     analysis_type = st.sidebar.selectbox(
         "Analysis Type",
-        ["List Snapshots", "Compare Surfaces", "Metrics Time Series"],
+        ["List Snapshots", "Visualize Snapshot", "Compare Surfaces", "Metrics Time Series"],
         help="Select type of historical analysis"
     )
 
@@ -288,6 +320,122 @@ elif mode == "Analyze Historical Data":
         st.dataframe(df_snapshots, use_container_width=True, hide_index=True)
 
         st.info(f"Total snapshots: {len(snapshots)}")
+
+    elif analysis_type == "Visualize Snapshot":
+        st.header("🔍 Visualize Historical Snapshot")
+
+        # Select snapshot
+        snapshot_labels = [f"{s.timestamp.strftime('%Y-%m-%d %H:%M')} ({s.currency})" for s in snapshots]
+        snap_idx = st.selectbox("Select Snapshot", range(len(snapshots)),
+                                format_func=lambda x: snapshot_labels[x])
+        snapshot = snapshots[snap_idx]
+
+        # Load raw data if available
+        history.load_raw_data(snapshot)
+
+        # Display snapshot info
+        st.subheader("📊 Snapshot Summary")
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Timestamp", snapshot.timestamp.strftime('%Y-%m-%d %H:%M'))
+        with col2:
+            st.metric("Currency", snapshot.currency)
+        with col3:
+            st.metric("Price", f"${snapshot.underlying_price:,.2f}")
+        with col4:
+            if snapshot.dvol:
+                st.metric("DVOL", f"{snapshot.dvol:.2f}%")
+            else:
+                st.metric("DVOL", "N/A")
+
+        # Show metrics if available
+        if snapshot.metrics:
+            st.subheader("🔑 Key Metrics")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**ATM Implied Volatility**")
+                atm_data = []
+                for tenor in [7, 30, 60, 90, 180]:
+                    key = f'atm_iv_{tenor}d'
+                    if key in snapshot.metrics and not pd.isna(snapshot.metrics[key]):
+                        atm_data.append({
+                            'Tenor': f'{tenor}d',
+                            'IV (%)': f"{snapshot.metrics[key]*100:.2f}"
+                        })
+                if atm_data:
+                    st.dataframe(pd.DataFrame(atm_data), hide_index=True, use_container_width=True)
+
+            with col2:
+                st.markdown("**Other Metrics**")
+                other_metrics = []
+                if 'skew_25d' in snapshot.metrics and not pd.isna(snapshot.metrics['skew_25d']):
+                    other_metrics.append({'Metric': '25-Delta Skew', 'Value': f"{snapshot.metrics['skew_25d']*100:.2f}pp"})
+                if 'term_structure_slope' in snapshot.metrics and not pd.isna(snapshot.metrics['term_structure_slope']):
+                    other_metrics.append({'Metric': 'Term Structure Slope', 'Value': f"{snapshot.metrics['term_structure_slope']*100:.2f}pp"})
+                if 'iv_std' in snapshot.metrics:
+                    other_metrics.append({'Metric': 'IV Std Dev', 'Value': f"{snapshot.metrics['iv_std']*100:.2f}pp"})
+                if other_metrics:
+                    st.dataframe(pd.DataFrame(other_metrics), hide_index=True, use_container_width=True)
+
+        # Visualizations
+        st.header("📈 Volatility Surface Visualizations")
+
+        # 3D Surface
+        if snapshot.surface_data:
+            st.subheader(f"{snapshot.currency} Implied Volatility Surface")
+            log_m_mesh, tte_mesh, iv_surf = snapshot.surface_data
+            fig, _ = plot_volatility_surface(
+                log_m_mesh, tte_mesh, iv_surf,
+                snapshot.underlying_price,
+                f'{snapshot.currency} Implied Volatility Surface - {snapshot.timestamp.strftime("%Y-%m-%d %H:%M")}'
+            )
+            st.pyplot(fig)
+
+            # Heatmap
+            st.subheader("Volatility Heatmap")
+            fig, _ = plot_heatmap(log_m_mesh, tte_mesh, iv_surf, snapshot.underlying_price)
+            st.pyplot(fig)
+
+        # Smile and Term Structure if raw data available
+        if snapshot.raw_options is not None:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("Volatility Smile")
+                fig, _ = plot_volatility_smile(snapshot.raw_options)
+                st.pyplot(fig)
+
+            with col2:
+                st.subheader("Term Structure")
+                fig, _ = plot_term_structure(snapshot.raw_options)
+                st.pyplot(fig)
+
+            # Greeks if available - prefer calculated Greeks (bs_*) over Deribit data
+            df = snapshot.raw_options
+            greek_mapping = {
+                'Delta': 'bs_delta' if 'bs_delta' in df.columns else 'delta',
+                'Gamma': 'bs_gamma' if 'bs_gamma' in df.columns else 'gamma',
+                'Vega': 'bs_vega' if 'bs_vega' in df.columns else 'vega'
+            }
+
+            available_greeks = [name for name, col in greek_mapping.items() if col in df.columns and df[col].notna().any()]
+
+            if available_greeks:
+                st.header("🎯 Greeks Surfaces")
+                if any('bs_' in greek_mapping[name] for name in available_greeks):
+                    st.info("ℹ️ Greeks calculated from smoothed Black-Scholes model using interpolated IV surface")
+
+                greek_tabs = st.tabs(available_greeks)
+
+                for idx, greek_name in enumerate(available_greeks):
+                    with greek_tabs[idx]:
+                        greek_col = greek_mapping[greek_name]
+                        fig, _ = plot_greeks_surface_3d(df, snapshot.underlying_price, greek=greek_col)
+                        st.pyplot(fig)
+        else:
+            st.info("ℹ️ Raw options data not available. Only surface-based plots are shown. To see smile, term structure, and Greeks, save snapshots with 'Save Raw Data' enabled.")
 
     elif analysis_type == "Compare Surfaces":
         st.header("🔄 Surface Comparison")

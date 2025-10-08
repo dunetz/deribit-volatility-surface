@@ -108,9 +108,44 @@ Snapshots are saved in `vol_surface_history/`:
 - `{CURRENCY}_{YYYYMMDD_HHMMSS}.json` - Snapshot metadata
 - `{CURRENCY}_{YYYYMMDD_HHMMSS}_raw.pkl` - Raw options data (optional)
 
+## Deployment
+
+### Streamlit Cloud (Quick Deploy)
+
+The app is ready to deploy to Streamlit Cloud:
+
+1. Push to GitHub: `git push origin main`
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Connect your GitHub repository
+4. Deploy `app.py`
+
+**Note:** Streamlit Cloud uses ephemeral storage, so:
+- ✅ All visualizations work perfectly
+- ✅ Real-time surface building
+- ❌ Snapshot saving is disabled (temporary storage)
+- ❌ Historical analysis requires cloud storage integration
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for:
+- Adding AWS S3 for persistent storage
+- Database integration options
+- Self-hosting with Docker
+- Full persistence solutions
+
+### Local Development
+
+For full features including historical analysis:
+```bash
+streamlit run app.py
+```
+
+All snapshot and plot saving features work when running locally.
+
 ## Documentation
 
-See [CLAUDE.md](CLAUDE.md) for detailed architecture and API reference.
+- [README.md](README.md) - This file, quick start guide
+- [CLAUDE.md](CLAUDE.md) - Detailed architecture and API reference
+- [STREAMLIT_GUIDE.md](STREAMLIT_GUIDE.md) - Streamlit app user guide
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Cloud deployment and persistence options
 
 ## Legacy Notebook
 

@@ -4,6 +4,7 @@ CLI script for analyzing historical volatility surfaces.
 
 Usage:
     python analyze_history.py --list
+    python analyze_history.py --visualize --date 2025-10-07
     python analyze_history.py --compare --dates 2025-10-01 2025-10-07
     python analyze_history.py --timeseries
     python analyze_history.py --event-study --date 2025-10-05 --days-before 3 --days-after 3
@@ -16,7 +17,10 @@ import matplotlib.pyplot as plt
 
 from snapshot import SurfaceHistory
 from visualizations import (plot_surface_comparison, plot_difference_surface,
-                           plot_metrics_timeseries)
+                           plot_metrics_timeseries, plot_volatility_surface,
+                           plot_volatility_smile, plot_term_structure,
+                           plot_heatmap, plot_greeks_surface_3d)
+import os
 
 
 def list_snapshots(history_dir='vol_surface_history', currency=None):
@@ -102,6 +106,104 @@ def plot_timeseries(history_dir='vol_surface_history', currency=None, save_plots
     plot_metrics_timeseries(history, save_path=save_path)
 
 
+def visualize_snapshot(date_str, history_dir='vol_surface_history',
+                      currency=None, save_plots=False, plots_dir='plots'):
+    """Display all standard plots for a single historical snapshot"""
+    history = SurfaceHistory(storage_dir=history_dir)
+    snapshots = history.load_all_snapshots(currency=currency)
+
+    if not snapshots:
+        print("No snapshots found")
+        return
+
+    # Parse date
+    try:
+        target_date = datetime.fromisoformat(date_str)
+    except:
+        print(f"Error parsing date. Use format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS")
+        return
+
+    # Find closest snapshot
+    snapshot = history.get_snapshot_by_date(target_date)
+
+    if not snapshot:
+        print(f"Could not find snapshot for date {date_str}")
+        return
+
+    print(f"\nVisualizing snapshot: {snapshot.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Currency: {snapshot.currency}")
+    print(f"Price: ${snapshot.underlying_price:,.2f}")
+    if snapshot.dvol:
+        print(f"DVOL: {snapshot.dvol:.2f}%")
+
+    # Print metrics
+    if snapshot.metrics:
+        print("\nMetrics:")
+        import numpy as np
+        for key, value in snapshot.metrics.items():
+            if value is not None and not (isinstance(value, float) and np.isnan(value)):
+                if isinstance(value, float):
+                    print(f"  {key}: {value*100:.2f}%")
+                else:
+                    print(f"  {key}: {value}")
+
+    # Setup save directory if needed
+    save_dir = None
+    if save_plots:
+        timestamp_str = snapshot.timestamp.strftime('%Y%m%d_%H%M%S')
+        save_dir = os.path.join(plots_dir, f"{snapshot.currency}_{timestamp_str}_historical")
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"\nSaving plots to: {save_dir}/")
+
+    # Check if raw data is available
+    if snapshot.raw_options is None:
+        print("\nNote: Raw options data not available. Only surface-based plots will be generated.")
+        print("      To include smile and term structure plots, save snapshots with --save-raw")
+
+    # Plot 3D surface
+    if snapshot.surface_data:
+        log_moneyness_mesh, tte_mesh, iv_surface = snapshot.surface_data
+
+        save_path = os.path.join(save_dir, f"{snapshot.currency}_volatility_surface_3d.png") if save_dir else None
+        plot_volatility_surface(
+            log_moneyness_mesh, tte_mesh, iv_surface,
+            snapshot.underlying_price,
+            title=f'{snapshot.currency} Implied Volatility Surface - {snapshot.timestamp.strftime("%Y-%m-%d %H:%M")}',
+            save_path=save_path
+        )
+
+        # Plot heatmap
+        save_path = os.path.join(save_dir, f"{snapshot.currency}_volatility_heatmap.png") if save_dir else None
+        plot_heatmap(
+            log_moneyness_mesh, tte_mesh, iv_surface,
+            snapshot.underlying_price,
+            save_path=save_path
+        )
+
+    # Plot smile and term structure if raw data available
+    if snapshot.raw_options is not None:
+        df = snapshot.raw_options
+
+        save_path = os.path.join(save_dir, f"{snapshot.currency}_volatility_smile.png") if save_dir else None
+        plot_volatility_smile(df, save_path=save_path)
+
+        save_path = os.path.join(save_dir, f"{snapshot.currency}_term_structure.png") if save_dir else None
+        plot_term_structure(df, save_path=save_path)
+
+        # Plot Greeks if available
+        if 'delta' in df.columns and df['delta'].notna().any():
+            save_path = os.path.join(save_dir, f"{snapshot.currency}_delta_surface_3d.png") if save_dir else None
+            plot_greeks_surface_3d(df, snapshot.underlying_price, 'delta', save_path=save_path)
+
+        if 'gamma' in df.columns and df['gamma'].notna().any():
+            save_path = os.path.join(save_dir, f"{snapshot.currency}_gamma_surface_3d.png") if save_dir else None
+            plot_greeks_surface_3d(df, snapshot.underlying_price, 'gamma', save_path=save_path)
+
+        if 'vega' in df.columns and df['vega'].notna().any():
+            save_path = os.path.join(save_dir, f"{snapshot.currency}_vega_surface_3d.png") if save_dir else None
+            plot_greeks_surface_3d(df, snapshot.underlying_price, 'vega', save_path=save_path)
+
+
 def event_study(event_date_str, days_before=5, days_after=5,
                history_dir='vol_surface_history', currency=None, save_plots=False):
     """Analyze surface changes around a specific event"""
@@ -174,6 +276,8 @@ def main():
 Examples:
   python analyze_history.py --list
   python analyze_history.py --list --currency BTC
+  python analyze_history.py --visualize --date 2025-10-07
+  python analyze_history.py --visualize --date 2025-10-07 --save-plots
   python analyze_history.py --compare --dates 2025-10-01 2025-10-07
   python analyze_history.py --timeseries
   python analyze_history.py --event-study --date 2025-10-05 --days-before 3 --days-after 3
@@ -208,6 +312,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--visualize',
+        action='store_true',
+        help='Display all plots for a single historical snapshot'
+    )
+
+    parser.add_argument(
         '--event-study',
         action='store_true',
         help='Analyze surface around an event date'
@@ -216,7 +326,7 @@ Examples:
     parser.add_argument(
         '--date',
         type=str,
-        help='Event date for event study (format: YYYY-MM-DD)'
+        help='Date for snapshot visualization or event study (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)'
     )
 
     parser.add_argument(
@@ -253,11 +363,21 @@ Examples:
         help='Save plots to files instead of displaying'
     )
 
+    parser.add_argument(
+        '--plots-dir',
+        type=str,
+        default='plots',
+        help='Directory to save plots when using --save-plots (default: plots)'
+    )
+
     args = parser.parse_args()
 
     # Validate arguments
     if args.compare and not args.dates:
         parser.error("--compare requires --dates DATE1 DATE2")
+
+    if args.visualize and not args.date:
+        parser.error("--visualize requires --date DATE")
 
     if args.event_study and not args.date:
         parser.error("--event-study requires --date DATE")
@@ -266,6 +386,10 @@ Examples:
     try:
         if args.list:
             list_snapshots(args.history_dir, args.currency)
+
+        elif args.visualize:
+            visualize_snapshot(args.date, args.history_dir, args.currency,
+                             args.save_plots, args.plots_dir)
 
         elif args.compare:
             compare_snapshots(args.dates[0], args.dates[1], args.history_dir,
